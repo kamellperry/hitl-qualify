@@ -31,10 +31,20 @@ def save_classified_data(filepath, data):
         print(f"Error saving data to {filepath}: {e}")
 
 
+def display_status(current, total, yes, no, maybe):
+    print('\033[2J\033[H', end='')  # Clear screen and move cursor to home
+    print(f"Classification Progress: {current}/{total}")
+    print(f"Yes: {yes}, No: {no}, Maybe: {maybe}")
+    print("-" * 40)
+
+
 def main():
     profiles = load_data(INPUT_FILE)
     classified_profiles = []
     processed_urls = set()
+    yes_count = 0
+    no_count = 0
+    maybe_count = 0
 
     # Load existing classifications if output file exists to resume
     if os.path.exists(OUTPUT_FILE):
@@ -44,6 +54,13 @@ def main():
             p["profileURL"] for p in classified_profiles if "profileURL" in p
         }
         print(f"Loaded {len(classified_profiles)} previously classified profiles.")
+        for p in classified_profiles:
+            if p.get("classification") == "yes":
+                yes_count += 1
+            elif p.get("classification") == "no":
+                no_count += 1
+            elif p.get("classification") == "maybe":
+                maybe_count += 1
 
     profiles_to_classify = [
         p for p in profiles if p.get("profileURL") not in processed_urls
@@ -60,6 +77,7 @@ def main():
 
     try:
         for i, profile in enumerate(profiles_to_classify):
+            display_status(len(classified_profiles) + 1, len(profiles), yes_count, no_count, maybe_count)
             profile_url = profile.get("profileURL")
             profile_username = profile.get("username")
             profile_text = profile.get("profileText", profile_username).replace(
@@ -112,10 +130,13 @@ def main():
                 sys.exit(0)
             elif decision == "y":
                 profile["classification"] = "yes"
+                yes_count += 1
             elif decision == "n":
                 profile["classification"] = "no"
+                no_count += 1
             elif decision == "m":
                 profile["classification"] = "maybe"
+                maybe_count += 1
 
             classified_profiles.append(profile)
 
