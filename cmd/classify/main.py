@@ -1,13 +1,18 @@
 # scrape_followers/classify_profiles.py
 import json
-import webbrowser
 import os
 import sys
-import readchar
 import time
+import webbrowser
+from pathlib import Path
 
-INPUT_FILE = "scrape_data.json"
-OUTPUT_FILE = "classified_data.json"
+import readchar
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DIST_DIR = PROJECT_ROOT / "dist"
+
+INPUT_FILE = DIST_DIR / "scrape_data.json"
+OUTPUT_FILE = DIST_DIR / "classified_data.json"
 
 
 def load_data(filepath):
