@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"omni-data-processor/internal/partition"
 )
@@ -29,6 +30,11 @@ func main() {
 	policy, err := partition.ParsePolicy(*policyValue)
 	if err != nil {
 		fatal(err)
+	}
+
+	if *outputPath == "dist/combined_profiles.txt" {
+		dateSuffix := time.Now().Format("20060102")
+		*outputPath = fmt.Sprintf("dist/combined_profiles_%s.txt", dateSuffix)
 	}
 
 	allInputs, primarySources, err := gatherInputs(*classifiedPath, *inputPath, *extraInputs, *strictFlag)
