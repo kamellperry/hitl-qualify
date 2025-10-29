@@ -4,6 +4,7 @@ import webbrowser
 import os
 import sys
 import readchar
+import time
 
 INPUT_FILE = "scrape_data.json"
 OUTPUT_FILE = "classified_data.json"
@@ -31,10 +32,10 @@ def save_classified_data(filepath, data):
         print(f"Error saving data to {filepath}: {e}")
 
 
-def display_status(current, total, yes, no, maybe):
+def display_status(current, total, yes, no, maybe, qualified):
     print('\033[2J\033[H', end='')  # Clear screen and move cursor to home
     print(f"Classification Progress: {current}/{total}")
-    print(f"Yes: {yes}, No: {no}, Maybe: {maybe}")
+    print(f"Yes: {yes}, No: {no}, Maybe: {maybe}, Qualified: {qualified}")
     print("-" * 40)
 
 
@@ -45,6 +46,7 @@ def main():
     yes_count = 0
     no_count = 0
     maybe_count = 0
+    qualified_count = 0
 
     # Load existing classifications if output file exists to resume
     if os.path.exists(OUTPUT_FILE):
@@ -61,6 +63,8 @@ def main():
                 no_count += 1
             elif p.get("classification") == "maybe":
                 maybe_count += 1
+            if p.get("classification") in ["yes", "maybe"]:
+                qualified_count += 1
 
     profiles_to_classify = [
         p for p in profiles if p.get("profileURL") not in processed_urls
@@ -77,7 +81,7 @@ def main():
 
     try:
         for i, profile in enumerate(profiles_to_classify):
-            display_status(len(classified_profiles) + 1, len(profiles), yes_count, no_count, maybe_count)
+            display_status(len(classified_profiles) + 1, len(profiles), yes_count, no_count, maybe_count, qualified_count)
             profile_url = profile.get("profileURL")
             profile_username = profile.get("username")
             profile_text = profile.get("profileText", profile_username).replace(
@@ -94,6 +98,8 @@ def main():
 
             # Open in browser
             webbrowser.open_new_tab(profile_url)
+            time.sleep(0.5)
+            os.system('osascript -e \'tell application "Ghostty" to activate\'')
 
             print("Your choice? ", end="", flush=True)
 
@@ -131,12 +137,14 @@ def main():
             elif decision == "y":
                 profile["classification"] = "yes"
                 yes_count += 1
+                qualified_count += 1
             elif decision == "n":
                 profile["classification"] = "no"
                 no_count += 1
             elif decision == "m":
                 profile["classification"] = "maybe"
                 maybe_count += 1
+                qualified_count += 1
 
             classified_profiles.append(profile)
 
