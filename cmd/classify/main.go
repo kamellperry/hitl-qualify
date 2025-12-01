@@ -25,10 +25,16 @@ type counters struct {
 	Yes   int
 	No    int
 	Maybe int
+	Other int
 }
 
 func (c counters) Qualified() int {
 	return c.Yes + c.Maybe
+}
+
+type historyEntry struct {
+	index          int
+	classification string
 }
 
 func main() {
@@ -46,13 +52,14 @@ func main() {
 	}
 
 	fmt.Printf("\nStarting classification. Total to classify: %d\n", len(profilesToClassify))
-	fmt.Println("--> Right Arrow (Yes), <-- Left Arrow (No), ^ Up Arrow (Maybe), 's' (Save & Stop)")
+	fmt.Println("--> Right Arrow (Yes), <-- Left Arrow (No), ^ Up Arrow (Maybe), 'o' (other), 'u' (undo), '?' (help), 's' (Save & Stop)")
 
 	restoreTerm, rawMode := enableRawInput()
 	defer restoreTerm()
 
 	reader := bufio.NewReader(os.Stdin)
 	interrupted := false
+	sessionHistory := make([]historyEntry, 0, len(profilesToClassify))
 
 	defer func() {
 		fmt.Println("\nSaving final classifications...")
@@ -67,12 +74,14 @@ func main() {
 		}
 	}()
 
-	for i, p := range profilesToClassify {
+	for idx := 0; idx < len(profilesToClassify); {
+		p := profilesToClassify[idx]
 		displayStatus(len(classified)+1, len(profiles), counts)
 
 		url := stringValue(p, "profileURL")
 		if url == "" {
-			fmt.Printf("Skipping profile %d due to missing URL.\n", i+1)
+			fmt.Printf("Skipping profile %d due to missing URL.\n", idx+1)
+			idx++
 			continue
 		}
 
@@ -86,9 +95,9 @@ func main() {
 		activateTerminal()
 
 		if !rawMode {
-			fmt.Print("Your choice? (y/n/m/s + Enter) ")
+			fmt.Print("Your choice? (y/n/m/s + Enter, o toggle other, u undo, ? help) ")
 		} else {
-			fmt.Print("Your choice? ")
+			fmt.Print("Your choice? (arrows y/n/m, o toggle, u undo, ? help) ")
 		}
 		decision, readErr := readDecision(reader, rawMode)
 		if readErr != nil {
@@ -102,6 +111,12 @@ func main() {
 		}
 
 		switch decision {
+		case "help":
+			showHelp(reader)
+			continue
+		case "toggle-other":
+			counts.Other = toggleOtherCandidate(p, counts.Other)
+			continue
 		case "save":
 			fmt.Println("Save & Stop")
 			if err := saveProfiles(outputPath, classified); err != nil {
@@ -112,6 +127,12 @@ func main() {
 			fmt.Println("\nKeyboard interrupt detected. Saving progress...")
 			interrupted = true
 			return
+		case "undo":
+			if undoLastDecision(&classified, profilesToClassify, &counts, &sessionHistory, &idx) {
+				continue
+			}
+			fmt.Println("Nothing to undo (no decisions to revert in this session).")
+			continue
 		case "yes":
 			p["classification"] = "yes"
 			counts.Yes++
@@ -126,8 +147,11 @@ func main() {
 		}
 
 		classified = append(classified, p)
+		sessionHistory = append(sessionHistory, historyEntry{index: idx, classification: decision})
 
-		if (i+1)%5 == 0 {
+		idx++
+
+		if (idx)%5 == 0 {
 			fmt.Println("Saving intermediate progress...")
 			if err := saveProfiles(outputPath, classified); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: failed to save progress: %v\n", err)
@@ -193,6 +217,9 @@ func loadExistingClassifications(path string) ([]profile, map[string]struct{}, c
 		case "maybe":
 			counts.Maybe++
 		}
+		if boolValue(p, "other_candidate") {
+			counts.Other++
+		}
 	}
 
 	fmt.Printf("Loaded %d previously classified profiles.\n", len(data))
@@ -217,8 +244,10 @@ func filterUnprocessed(all []profile, processed map[string]struct{}) []profile {
 func displayStatus(current, total int, counts counters) {
 	fmt.Print("\033[2J\033[H")
 	fmt.Printf("Classification Progress: %d/%d\n", current, total)
-	fmt.Printf("Yes: %d, No: %d, Maybe: %d, Qualified: %d\n", counts.Yes, counts.No, counts.Maybe, counts.Qualified())
+	fmt.Printf("Yes: %d, No: %d, Maybe: %d, Qualified: %d, Other: %d\n",
+		counts.Yes, counts.No, counts.Maybe, counts.Qualified(), counts.Other)
 	fmt.Println(strings.Repeat("-", 40))
+	fmt.Println("type ? for help | u undo | o mark other")
 }
 
 func readDecision(r *bufio.Reader, raw bool) (string, error) {
@@ -230,6 +259,18 @@ func readDecision(r *bufio.Reader, raw bool) (string, error) {
 
 		if b == 3 { // Ctrl+C
 			return "interrupt", nil
+		}
+
+		if b == '?' {
+			return "help", nil
+		}
+
+		if b == 'u' || b == 'U' {
+			return "undo", nil
+		}
+
+		if b == 'o' || b == 'O' {
+			return "toggle-other", nil
 		}
 
 		if b == 's' || b == 'S' {
@@ -314,6 +355,24 @@ func stringValue(p profile, key string) string {
 	}
 }
 
+func boolValue(p profile, key string) bool {
+	val, ok := p[key]
+	if !ok || val == nil {
+		return false
+	}
+	switch v := val.(type) {
+	case bool:
+		return v
+	case string:
+		lower := strings.ToLower(v)
+		return lower == "true" || lower == "1" || lower == "yes"
+	case float64:
+		return v != 0
+	default:
+		return false
+	}
+}
+
 func openURL(url string) {
 	if url == "" {
 		return
@@ -364,4 +423,90 @@ func enableRawInput() (restore func(), raw bool) {
 func fatal(err error) {
 	fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 	os.Exit(1)
+}
+
+func toggleOtherCandidate(p profile, currentCount int) int {
+	current := boolValue(p, "other_candidate")
+	newVal := !current
+	p["other_candidate"] = newVal
+
+	if newVal {
+		fmt.Println("Marked as candidate for other campaigns (o toggles).")
+		return currentCount + 1
+	}
+
+	fmt.Println("Removed 'other campaign' mark (o toggles).")
+	if currentCount > 0 {
+		return currentCount - 1
+	}
+	return 0
+}
+
+func undoLastDecision(classified *[]profile, profiles []profile, counts *counters, history *[]historyEntry, idx *int) bool {
+	if len(*history) == 0 {
+		return false
+	}
+
+	last := (*history)[len(*history)-1]
+	*history = (*history)[:len(*history)-1]
+
+	if len(*classified) > 0 {
+		*classified = (*classified)[:len(*classified)-1]
+	}
+
+	switch last.classification {
+	case "yes":
+		if counts.Yes > 0 {
+			counts.Yes--
+		}
+	case "no":
+		if counts.No > 0 {
+			counts.No--
+		}
+	case "maybe":
+		if counts.Maybe > 0 {
+			counts.Maybe--
+		}
+	}
+
+	prof := profiles[last.index]
+	delete(prof, "classification")
+
+	if *idx > last.index {
+		*idx = last.index
+	}
+
+	url := stringValue(prof, "profileURL")
+	user := stringValue(prof, "username")
+	if url != "" {
+		fmt.Printf("Undo: cleared last decision (%s) for %s (%s).\n", last.classification, user, url)
+	} else {
+		fmt.Printf("Undo: cleared last decision (%s).\n", last.classification)
+	}
+
+	return true
+}
+
+func showHelp(r *bufio.Reader) {
+	fmt.Print("\033[2J\033[H")
+	fmt.Println("Classification CLI Help")
+	fmt.Println(strings.Repeat("-", 28))
+	fmt.Println("Use arrow keys or y/n/m to classify the current profile:")
+	fmt.Println("  → or y : Yes")
+	fmt.Println("  ← or n : No")
+	fmt.Println("  ↑ or m : Maybe")
+	fmt.Println("Other controls:")
+	fmt.Println("  o : Toggle 'other campaign' marker")
+	fmt.Println("  u : Undo last decision in this session")
+	fmt.Println("  s : Save & stop")
+	fmt.Println("  ? : Show this help")
+	fmt.Println("Ctrl+C : Save progress and exit")
+	fmt.Println()
+	fmt.Println("Data files:")
+	fmt.Println("  Input : dist/scrape_data.json")
+	fmt.Println("  Output: dist/classified_data.json (auto-resume)")
+	fmt.Println()
+	fmt.Println("Press any key to return to classification...")
+
+	_, _ = r.ReadByte()
 }
