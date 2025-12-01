@@ -35,6 +35,7 @@ func (c counters) Qualified() int {
 type historyEntry struct {
 	index          int
 	classification string
+	other          bool
 }
 
 func main() {
@@ -60,6 +61,8 @@ func main() {
 	reader := bufio.NewReader(os.Stdin)
 	interrupted := false
 	sessionHistory := make([]historyEntry, 0, len(profilesToClassify))
+	statusMsg := ""
+	lastOpenedIdx := -1
 
 	defer func() {
 		fmt.Println("\nSaving final classifications...")
@@ -76,7 +79,8 @@ func main() {
 
 	for idx := 0; idx < len(profilesToClassify); {
 		p := profilesToClassify[idx]
-		displayStatus(len(classified)+1, len(profiles), counts)
+		displayStatus(len(classified)+1, len(profiles), counts, statusMsg)
+		statusMsg = ""
 
 		url := stringValue(p, "profileURL")
 		if url == "" {
@@ -90,9 +94,12 @@ func main() {
 		fmt.Printf("Text: %s\n", text)
 		fmt.Printf("URL: %s\n", url)
 
-		openURL(url)
-		time.Sleep(500 * time.Millisecond)
-		activateTerminal()
+		if idx != lastOpenedIdx {
+			openURL(url)
+			time.Sleep(500 * time.Millisecond)
+			activateTerminal()
+			lastOpenedIdx = idx
+		}
 
 		if !rawMode {
 			fmt.Print("Your choice? (y/n/m/s + Enter, o toggle other, u undo, ? help) ")
@@ -113,9 +120,24 @@ func main() {
 		switch decision {
 		case "help":
 			showHelp(reader)
+			statusMsg = "Closed help."
 			continue
-		case "toggle-other":
-			counts.Other = toggleOtherCandidate(p, counts.Other)
+		case "other":
+			p["classification"] = "no"
+			p["other_candidate"] = true
+			counts.No++
+			counts.Other++
+			classified = append(classified, p)
+			sessionHistory = append(sessionHistory, historyEntry{index: idx, classification: "no", other: true})
+			statusMsg = fmt.Sprintf("Saved as no + other (%s)", url)
+			idx++
+			lastOpenedIdx = -1
+			if (idx)%5 == 0 {
+				fmt.Println("Saving intermediate progress...")
+				if err := saveProfiles(outputPath, classified); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: failed to save progress: %v\n", err)
+				}
+			}
 			continue
 		case "save":
 			fmt.Println("Save & Stop")
@@ -128,10 +150,12 @@ func main() {
 			interrupted = true
 			return
 		case "undo":
-			if undoLastDecision(&classified, profilesToClassify, &counts, &sessionHistory, &idx) {
+			if ok, msg := undoLastDecision(&classified, profilesToClassify, &counts, &sessionHistory, &idx); ok {
+				statusMsg = msg
+				lastOpenedIdx = -1
 				continue
 			}
-			fmt.Println("Nothing to undo (no decisions to revert in this session).")
+			statusMsg = "Nothing to undo this session."
 			continue
 		case "yes":
 			p["classification"] = "yes"
@@ -147,7 +171,8 @@ func main() {
 		}
 
 		classified = append(classified, p)
-		sessionHistory = append(sessionHistory, historyEntry{index: idx, classification: decision})
+		sessionHistory = append(sessionHistory, historyEntry{index: idx, classification: decision, other: false})
+		statusMsg = fmt.Sprintf("Saved %s for %s", decision, url)
 
 		idx++
 
@@ -241,13 +266,16 @@ func filterUnprocessed(all []profile, processed map[string]struct{}) []profile {
 	return result
 }
 
-func displayStatus(current, total int, counts counters) {
+func displayStatus(current, total int, counts counters, status string) {
 	fmt.Print("\033[2J\033[H")
 	fmt.Printf("Classification Progress: %d/%d\n", current, total)
 	fmt.Printf("Yes: %d, No: %d, Maybe: %d, Qualified: %d, Other: %d\n",
 		counts.Yes, counts.No, counts.Maybe, counts.Qualified(), counts.Other)
 	fmt.Println(strings.Repeat("-", 40))
 	fmt.Println("type ? for help | u undo | o mark other")
+	if status != "" {
+		fmt.Println(status)
+	}
 }
 
 func readDecision(r *bufio.Reader, raw bool) (string, error) {
@@ -270,7 +298,7 @@ func readDecision(r *bufio.Reader, raw bool) (string, error) {
 		}
 
 		if b == 'o' || b == 'O' {
-			return "toggle-other", nil
+			return "other", nil
 		}
 
 		if b == 's' || b == 'S' {
@@ -425,26 +453,9 @@ func fatal(err error) {
 	os.Exit(1)
 }
 
-func toggleOtherCandidate(p profile, currentCount int) int {
-	current := boolValue(p, "other_candidate")
-	newVal := !current
-	p["other_candidate"] = newVal
-
-	if newVal {
-		fmt.Println("Marked as candidate for other campaigns (o toggles).")
-		return currentCount + 1
-	}
-
-	fmt.Println("Removed 'other campaign' mark (o toggles).")
-	if currentCount > 0 {
-		return currentCount - 1
-	}
-	return 0
-}
-
-func undoLastDecision(classified *[]profile, profiles []profile, counts *counters, history *[]historyEntry, idx *int) bool {
+func undoLastDecision(classified *[]profile, profiles []profile, counts *counters, history *[]historyEntry, idx *int) (bool, string) {
 	if len(*history) == 0 {
-		return false
+		return false, ""
 	}
 
 	last := (*history)[len(*history)-1]
@@ -468,9 +479,15 @@ func undoLastDecision(classified *[]profile, profiles []profile, counts *counter
 			counts.Maybe--
 		}
 	}
+	if last.other && counts.Other > 0 {
+		counts.Other--
+	}
 
 	prof := profiles[last.index]
 	delete(prof, "classification")
+	if last.other {
+		delete(prof, "other_candidate")
+	}
 
 	if *idx > last.index {
 		*idx = last.index
@@ -478,13 +495,15 @@ func undoLastDecision(classified *[]profile, profiles []profile, counts *counter
 
 	url := stringValue(prof, "profileURL")
 	user := stringValue(prof, "username")
+	msg := "Undo: cleared last decision"
+	if last.classification != "" {
+		msg = fmt.Sprintf("Undo: cleared %s", last.classification)
+	}
 	if url != "" {
-		fmt.Printf("Undo: cleared last decision (%s) for %s (%s).\n", last.classification, user, url)
-	} else {
-		fmt.Printf("Undo: cleared last decision (%s).\n", last.classification)
+		msg = fmt.Sprintf("%s for %s (%s)", msg, user, url)
 	}
 
-	return true
+	return true, msg
 }
 
 func showHelp(r *bufio.Reader) {
@@ -496,7 +515,7 @@ func showHelp(r *bufio.Reader) {
 	fmt.Println("  ← or n : No")
 	fmt.Println("  ↑ or m : Maybe")
 	fmt.Println("Other controls:")
-	fmt.Println("  o : Toggle 'other campaign' marker")
+	fmt.Println("  o : Save as 'no' for this campaign and mark for other campaigns")
 	fmt.Println("  u : Undo last decision in this session")
 	fmt.Println("  s : Save & stop")
 	fmt.Println("  ? : Show this help")
