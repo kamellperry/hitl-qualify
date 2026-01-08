@@ -2,14 +2,17 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"strings"
 )
 
 const (
-	inputPath  = "dist/profiles.txt"
-	outputPath = "dist/scrape_data.json"
+	ProfilesTextPath     = "dist/profiles.txt"
+	ScrapeDataPath       = "dist/scrape_data.json"
+	ClassifiedOutputPath = "dist/classified_data.json"
+	ProspectsPath        = "dist/prospects.json"
 )
 
 type Profile struct {
@@ -17,13 +20,58 @@ type Profile struct {
 	ProfileURL string `json:"profileURL"`
 }
 
+type ClassifiedProfile struct {
+	Username       string `json:"username"`
+	ProfileURL     string `json:"profileURL"`
+	Classification string `json:"classification"`
+	OtherCandidate bool   `json:"other_candidate,omitempty"`
+}
+
 func main() {
+	partitionClassifiedData()
+}
+
+func partitionClassifiedData() {
 	var (
-		profiles []Profile
+		classified []ClassifiedProfile
+		prospects  []string
 	)
-	data, err := os.ReadFile(inputPath)
+
+	f, err := os.Open(ClassifiedOutputPath)
 	if err != nil {
-		log.Fatalf("input file not found at %s: %v", inputPath, err)
+		log.Fatalf("failed to read data: %v", err)
+	}
+
+	if err := json.NewDecoder(f).Decode(&classified); err != nil {
+		log.Fatalf("failed to decode json: %v", err)
+	}
+
+	for _, v := range classified {
+		if v.Classification == "no" {
+			continue
+		}
+		prospects = append(prospects, v.ProfileURL)
+	}
+
+	p := map[string][]string{
+		"prospects": prospects,
+	}
+
+	out, err := os.Create(ProspectsPath)
+	if err != nil {
+		log.Fatalf("failed to create prospects file: %v", err)
+	}
+
+	if err := writeJSON(out, p); err != nil {
+		log.Fatalf("failed to save data to file %s: %v", f.Name(), err)
+	}
+}
+
+func createScrapeData() {
+	var profiles []Profile
+	data, err := os.ReadFile(ProfilesTextPath)
+	if err != nil {
+		log.Fatalf("input file not found at %s: %v", ProfilesTextPath, err)
 		return
 	}
 
@@ -41,17 +89,17 @@ func main() {
 		profiles = append(profiles, p)
 	}
 
-	outInfo, err := os.Stat(outputPath)
+	outInfo, err := os.Stat(ClassifiedOutputPath)
 	if err != nil {
-		log.Fatalf("input file not found at %s: %v", inputPath, err)
+		log.Fatalf("input file not found at %s: %v", ProfilesTextPath, err)
 		return
 	}
 
 	if outInfo.Size() < 1 {
 		// File doesn't contain any data, just write to it
-		out, err := os.Create(outputPath)
+		out, err := os.Create(ClassifiedOutputPath)
 		if err != nil {
-			log.Fatalf("failed to create file %s: %v", inputPath, err)
+			log.Fatalf("failed to create file %s: %v", ProfilesTextPath, err)
 			return
 		}
 		defer out.Close()
@@ -60,7 +108,7 @@ func main() {
 	}
 
 	// Append data
-	p, err := os.ReadFile(outputPath)
+	p, err := os.ReadFile(ClassifiedOutputPath)
 	if err != nil {
 		log.Fatalf("failed to read file: %v", err)
 	}
@@ -72,18 +120,21 @@ func main() {
 
 	currentData = append(currentData, profiles...)
 
-	f, err := os.Create(outputPath)
+	f, err := os.Create(ClassifiedOutputPath)
 	if err != nil {
-		log.Fatalf("failed to create file %s: %v", inputPath, err)
+		log.Fatalf("failed to create file %s: %v", ProfilesTextPath, err)
 		return
 	}
 	defer f.Close()
-	writeJSON(f, &currentData)
+
+	if err := writeJSON(f, &currentData); err != nil {
+		log.Fatalf("failed to save data to file %s: %v", f.Name(), err)
+	}
 }
 
-func writeJSON(file *os.File, data *[]Profile) {
+func writeJSON(file *os.File, data any) error {
 	if err := json.NewEncoder(file).Encode(data); err != nil {
-		log.Fatalf("failed to decode json: %v", err)
-		return
+		return fmt.Errorf("failed to decode json: %w", err)
 	}
+	return nil
 }
