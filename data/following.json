@@ -1,0 +1,10 @@
+{
+  "scrapedUserId": "33480724930",
+  "cursor": null,
+  "totalCollected": 0,
+  "users": [],
+  "error": {
+    "message": "Failed to fetch following: 401 Unauthorized",
+    "stack": "Error: Failed to fetch following: 401 Unauthorized\n    at fetchFollowingPage (/Users/kamell/Desktop/sandbox/hitl-qualify/partition/scrape.ts:70:23)\n    at async getFollowing (/Users/kamell/Desktop/sandbox/hitl-qualify/partition/scrape.ts:108:32)\n    at async main (/Users/kamell/Desktop/sandbox/hitl-qualify/partition/scrape.ts:135:25)"
+  }
+}
